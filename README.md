@@ -48,8 +48,8 @@ Before you begin, make sure the following are installed and running on your mach
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/theharithsa/Local_LLM_App.git
-   cd Local_LLM_App
+   git clone https://github.com/theharithsa/Local-LLM-Application-with-OpenLLMetry.git
+   cd Local-LLM-Application-with-OpenLLMetry
    ```
 
 2. **Create your environment file:**

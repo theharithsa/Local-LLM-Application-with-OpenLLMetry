@@ -34,7 +34,7 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ## Reporting Bugs
 
-Open an [issue](https://github.com/theharithsa/Local_LLM_App/issues) with:
+Open an [issue](https://github.com/theharithsa/Local-LLM-Application-with-OpenLLMetry/issues) with:
 - Steps to reproduce
 - Expected vs actual behavior
 - Docker and Ollama versions

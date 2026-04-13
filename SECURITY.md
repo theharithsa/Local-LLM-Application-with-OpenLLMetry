@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in this project, please report it responsibly.
 
-**Do not open a public issue.** Instead, email the maintainer directly or use [GitHub's private vulnerability reporting](https://github.com/theharithsa/Local_LLM_App/security/advisories/new).
+**Do not open a public issue.** Instead, email the maintainer directly or use [GitHub's private vulnerability reporting](https://github.com/theharithsa/Local-LLM-Application-with-OpenLLMetry/security/advisories/new).
 
 Please include:
 - Description of the vulnerability
