@@ -209,6 +209,17 @@ def _format_output_messages(content: str, finish_reason: str = "stop") -> str:
         "finish_reason": finish_reason,
     }])
 
+
+def _classify_request(messages: list[dict]) -> str:
+    """Classify an Open WebUI request as user_chat, title_generation, or tag_generation."""
+    last_content = (messages[-1].get("content", "") if messages else "").lower()
+    if "generate a concise" in last_content and "title" in last_content:
+        return "title_generation"
+    if ("generate tags" in last_content or "categorize" in last_content
+            or "tag the conversation" in last_content):
+        return "tag_generation"
+    return "user_chat"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -304,6 +315,10 @@ async def chat_completions(request: ChatCompletionRequest):
     # --- OTel GenAI semantic convention attributes --------------------------
     span = trace.get_current_span()
     messages_raw = [{"role": m.role, "content": m.content} for m in request.messages]
+    # Classify request type and rename span
+    request_type = _classify_request(messages_raw)
+    span.update_name(f"{request_type}")
+    span.set_attribute("llm.request.purpose", request_type)
     # Required
     span.set_attribute("gen_ai.operation.name", "chat")
     span.set_attribute("gen_ai.system", "ollama")
@@ -347,11 +362,11 @@ async def chat_completions(request: ChatCompletionRequest):
 
     if request.stream:
         return StreamingResponse(
-            _stream_ollama(ollama_payload, model),
+            _stream_ollama(ollama_payload, model, request_type),
             media_type="text/event-stream",
         )
 
-    result = await _non_stream_ollama(ollama_payload, model)
+    result = await _non_stream_ollama(ollama_payload, model, request_type)
     duration = time.time() - start
     usage = result.get("usage", {})
     prompt_toks = usage.get("prompt_tokens", 0)
@@ -408,9 +423,9 @@ async def chat_completions(request: ChatCompletionRequest):
 # --------------------------------------------------------------------------- #
 
 @workflow(name="stream_ollama")
-async def _stream_ollama(payload: dict, model: str):
+async def _stream_ollama(payload: dict, model: str, request_type: str = "user_chat"):
     """Translate Ollama NDJSON stream → OpenAI SSE stream."""
-    logger.info("Starting streaming response", extra={"model": model})
+    logger.info("Starting streaming response", extra={"model": model, "request_type": request_type})
     stream_start = time.time()
     first_token_time: float | None = None
     _semconv_attrs = {
@@ -422,6 +437,8 @@ async def _stream_ollama(payload: dict, model: str):
         "server.port": _OLLAMA_PORT,
     }
     span = trace.get_current_span()
+    span.update_name(f"{request_type} stream")
+    span.set_attribute("llm.request.purpose", request_type)
     span.set_attribute("gen_ai.operation.name", "chat")
     span.set_attribute("gen_ai.system", "ollama")
     span.set_attribute("gen_ai.provider.name", "ollama")
@@ -530,7 +547,7 @@ async def _stream_ollama(payload: dict, model: str):
 
 
 @workflow(name="non_stream_ollama")
-async def _non_stream_ollama(payload: dict, model: str) -> dict:
+async def _non_stream_ollama(payload: dict, model: str, request_type: str = "user_chat") -> dict:
     """Call Ollama without streaming and return an OpenAI-compatible response."""
     ollama_start = time.time()
     _ns_attrs = {
@@ -542,6 +559,8 @@ async def _non_stream_ollama(payload: dict, model: str) -> dict:
         "server.port": _OLLAMA_PORT,
     }
     span = trace.get_current_span()
+    span.update_name(f"{request_type} non-stream")
+    span.set_attribute("llm.request.purpose", request_type)
     span.set_attribute("gen_ai.operation.name", "chat")
     span.set_attribute("gen_ai.system", "ollama")
     span.set_attribute("gen_ai.provider.name", "ollama")
