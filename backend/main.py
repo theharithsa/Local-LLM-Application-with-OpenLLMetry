@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -6,7 +7,7 @@ import uuid
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -293,7 +294,7 @@ async def list_models():
 
 @app.post("/v1/chat/completions")
 @workflow(name="chat_completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, raw_request: Request):
     model = request.model or DEFAULT_MODEL
     start = time.time()
     _semconv_attrs = {
@@ -319,6 +320,23 @@ async def chat_completions(request: ChatCompletionRequest):
     request_type = _classify_request(messages_raw)
     span.update_name(f"{request_type}")
     span.set_attribute("llm.request.purpose", request_type)
+
+    # Conversation fingerprint — correlates chat + title + tag traces from the
+    # same user turn by hashing the user messages (shared across all requests).
+    user_msgs = [m["content"] for m in messages_raw if m["role"] == "user"]
+    # Title/tag requests embed the chat history, so extract the first user msg
+    if request_type != "user_chat" and user_msgs:
+        # The history is embedded in the system/user prompt; hash first 200 chars
+        fingerprint_input = user_msgs[0][:200]
+    else:
+        fingerprint_input = "|".join(user_msgs)
+    conversation_fingerprint = hashlib.sha256(fingerprint_input.encode()).hexdigest()[:12]
+    span.set_attribute("conversation.fingerprint", conversation_fingerprint)
+
+    # Authorization header forwarding for user identification
+    auth_header = raw_request.headers.get("authorization", "")
+    if auth_header:
+        span.set_attribute("enduser.id", hashlib.sha256(auth_header.encode()).hexdigest()[:8])
     # Required
     span.set_attribute("gen_ai.operation.name", "chat")
     span.set_attribute("gen_ai.system", "ollama")
