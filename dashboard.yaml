@@ -1,0 +1,512 @@
+id: "325333a4-5a37-4ae7-9d0b-484387d111af"
+name: "Local LLM Observability"
+type: dashboard
+content:
+  version: 21
+  variables: []
+  settings:
+    defaultTimeframe:
+      enabled: true
+      value:
+        from: now()-2h
+        to: now()
+  tiles:
+    # =====================================================================
+    # SECTION 1: BUSINESS
+    # =====================================================================
+    "1":
+      type: markdown
+      content: |
+        ## 📊 Business Overview
+        Usage, token consumption, and user experience metrics for the Local LLM platform.
+
+    # --- KPI Row ---
+    "2":
+      type: data
+      title: "Total Requests"
+      query: |
+        timeseries sum(llm.request.count)
+        | fieldsAdd total = arraySum(`sum(llm.request.count)`)
+        | fields total
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Total Requests"
+          recordField: total
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "3":
+      type: data
+      title: "Total Tokens"
+      query: |
+        timeseries sum(gen_ai.client.token.usage)
+        | fieldsAdd total_tokens = arraySum(`sum(gen_ai.client.token.usage)`)
+        | fields total_tokens
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Total Tokens"
+          recordField: total_tokens
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "4":
+      type: data
+      title: "Avg Response Time"
+      query: |
+        timeseries avg(gen_ai.client.operation.duration)
+        | fieldsAdd avg_duration = arrayAvg(`avg(gen_ai.client.operation.duration)`)
+        | fields avg_duration
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Avg Response Time (s)"
+          recordField: avg_duration
+      unitsOverrides:
+        - identifier: avg_duration
+          baseUnit: second
+          displayUnit: null
+          decimals: 2
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "5":
+      type: data
+      title: "Avg TTFT"
+      query: |
+        timeseries avg(gen_ai.server.time_to_first_token)
+        | fieldsAdd avg_ttft = arrayAvg(`avg(gen_ai.server.time_to_first_token)`)
+        | fields avg_ttft
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Avg Time to First Token (s)"
+          recordField: avg_ttft
+      unitsOverrides:
+        - identifier: avg_ttft
+          baseUnit: second
+          displayUnit: null
+          decimals: 3
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    # --- Business Charts ---
+    "6":
+      type: data
+      title: "Request Volume"
+      query: |
+        timeseries sum(llm.request.count), by:{gen_ai.request.model}
+      visualization: barChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "7":
+      type: data
+      title: "Token Usage (Input vs Output)"
+      query: |
+        timeseries sum(gen_ai.client.token.usage), by:{gen_ai.token.type}
+      visualization: areaChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+          stacked: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "8":
+      type: data
+      title: "Response Time Trend"
+      query: |
+        timeseries avg(gen_ai.client.operation.duration), by:{gen_ai.request.model}
+      visualization: lineChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "9":
+      type: data
+      title: "Token Consumption by Type"
+      query: |
+        timeseries sum(gen_ai.client.token.usage), by:{gen_ai.token.type}
+        | fieldsAdd total = arraySum(`sum(gen_ai.client.token.usage)`)
+        | fields gen_ai.token.type, total
+      visualization: pieChart
+      visualizationSettings:
+        autoSelectVisualization: false
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "21":
+      type: data
+      title: "Top 10 Slowest Prompts"
+      query: |
+        fetch spans
+        | filter isNotNull(gen_ai.system)
+        | filter span.name == "stream_ollama.workflow" or span.name == "non_stream_ollama.workflow"
+        | lookup [fetch spans | filter isNotNull(gen_ai.prompt) | filter span.name == "chat_completions.workflow" | fields trace.id, gen_ai.prompt], sourceField:trace.id, lookupField:trace.id, prefix:"parent."
+        | fieldsAdd duration_sec = toDouble(duration) / 1000000000
+        | fieldsAdd prompt_preview = substring(parent.gen_ai.prompt, from:34, to:200)
+        | fields start_time, prompt_preview, gen_ai.request.model, gen_ai.usage.input_tokens, gen_ai.usage.output_tokens, duration_sec
+        | sort duration_sec desc
+        | limit 10
+      visualization: table
+      visualizationSettings:
+        autoSelectVisualization: false
+        table:
+          linewrapEnabled: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    # =====================================================================
+    # SECTION 2: TECHNICAL
+    # =====================================================================
+    "10":
+      type: markdown
+      content: |
+        ## 🔧 Technical Performance
+        Latency breakdown, throughput, traces, and logs for debugging and performance tuning.
+
+    # --- Technical KPIs ---
+    "11":
+      type: data
+      title: "Avg TPOT"
+      query: |
+        timeseries avg(gen_ai.server.time_per_output_token)
+        | fieldsAdd avg_tpot = arrayAvg(`avg(gen_ai.server.time_per_output_token)`)
+        | fields avg_tpot
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Avg Time Per Output Token (s)"
+          recordField: avg_tpot
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "12":
+      type: data
+      title: "Avg Throughput"
+      query: |
+        timeseries avg(llm.token.throughput)
+        | fieldsAdd avg_throughput = arrayAvg(`avg(llm.token.throughput)`)
+        | fields avg_throughput
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Avg Token Throughput (tok/s)"
+          recordField: avg_throughput
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "13":
+      type: data
+      title: "Total Errors"
+      query: |
+        timeseries sum(llm.request.errors)
+        | fieldsAdd total_errors = arraySum(`sum(llm.request.errors)`)
+        | fields total_errors
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Total Errors"
+          recordField: total_errors
+      thresholds:
+        - field: total_errors
+          id: 1
+          isEnabled: true
+          rules:
+            - { color: { Default: "#2f6862" }, comparator: "<=", id: 0, value: 0 }
+            - { color: { Default: "#eea53c" }, comparator: "<=", id: 1, value: 5 }
+            - { color: { Default: "#c62239" }, comparator: ">", id: 2, value: 5 }
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "14":
+      type: data
+      title: "Total Traces"
+      query: |
+        fetch spans
+        | filter isNotNull(gen_ai.system)
+        | summarize total_traces = countDistinct(trace.id)
+      visualization: singleValue
+      visualizationSettings:
+        autoSelectVisualization: false
+        singleValue:
+          showLabel: true
+          label: "Unique Traces"
+          recordField: total_traces
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    # --- Technical Charts ---
+    "15":
+      type: data
+      title: "Time to First Token (TTFT)"
+      query: |
+        timeseries avg(gen_ai.server.time_to_first_token), by:{gen_ai.request.model}
+      visualization: lineChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "16":
+      type: data
+      title: "Time Per Output Token (TPOT)"
+      query: |
+        timeseries avg(gen_ai.server.time_per_output_token), by:{gen_ai.request.model}
+      visualization: lineChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "17":
+      type: data
+      title: "Token Generation Throughput"
+      query: |
+        timeseries avg(llm.token.throughput), by:{gen_ai.request.model}
+      visualization: lineChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "18":
+      type: data
+      title: "Error Rate"
+      query: |
+        timeseries sum(llm.request.errors), by:{gen_ai.request.model}
+      visualization: barChart
+      visualizationSettings:
+        autoSelectVisualization: false
+        chartSettings:
+          legend:
+            position: bottom
+            showLegend: true
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    # --- Tables ---
+    "19":
+      type: data
+      title: "Recent Traces"
+      query: |
+        fetch spans
+        | filter isNotNull(gen_ai.system)
+        | fields start_time, trace.id, span.name, gen_ai.request.model, gen_ai.usage.input_tokens, gen_ai.usage.output_tokens, duration
+        | sort start_time desc
+        | limit 20
+      visualization: table
+      visualizationSettings:
+        autoSelectVisualization: false
+        table:
+          linewrapEnabled: false
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+    "20":
+      type: data
+      title: "Recent Logs"
+      query: |
+        fetch logs
+        | filter isNotNull(trace_id)
+        | filter otel.scope.name == "local-llm-backend"
+        | fields timestamp, content, loglevel, model, stream, trace_id
+        | sort timestamp desc
+        | limit 20
+      visualization: table
+      visualizationSettings:
+        autoSelectVisualization: false
+        table:
+          linewrapEnabled: false
+      davis:
+        enabled: false
+        davisVisualization:
+          isAvailable: true
+
+  layouts:
+    # === BUSINESS SECTION ===
+    "1":
+      x: 0
+      "y": 0
+      w: 20
+      h: 1
+    "2":
+      x: 0
+      "y": 1
+      w: 5
+      h: 4
+    "3":
+      x: 5
+      "y": 1
+      w: 5
+      h: 4
+    "4":
+      x: 10
+      "y": 1
+      w: 5
+      h: 4
+    "5":
+      x: 15
+      "y": 1
+      w: 5
+      h: 4
+    "6":
+      x: 0
+      "y": 5
+      w: 10
+      h: 7
+    "7":
+      x: 10
+      "y": 5
+      w: 10
+      h: 7
+    "8":
+      x: 0
+      "y": 12
+      w: 14
+      h: 7
+    "9":
+      x: 14
+      "y": 12
+      w: 6
+      h: 7
+    "21":
+      x: 0
+      "y": 19
+      w: 20
+      h: 8
+
+    # === TECHNICAL SECTION ===
+    "10":
+      x: 0
+      "y": 27
+      w: 20
+      h: 1
+    "11":
+      x: 0
+      "y": 28
+      w: 5
+      h: 4
+    "12":
+      x: 5
+      "y": 28
+      w: 5
+      h: 4
+    "13":
+      x: 10
+      "y": 28
+      w: 5
+      h: 4
+    "14":
+      x: 15
+      "y": 28
+      w: 5
+      h: 4
+    "15":
+      x: 0
+      "y": 32
+      w: 10
+      h: 7
+    "16":
+      x: 10
+      "y": 32
+      w: 10
+      h: 7
+    "17":
+      x: 0
+      "y": 39
+      w: 10
+      h: 7
+    "18":
+      x: 10
+      "y": 39
+      w: 10
+      h: 7
+    "19":
+      x: 0
+      "y": 46
+      w: 20
+      h: 8
+    "20":
+      x: 0
+      "y": 54
+      w: 20
+      h: 8

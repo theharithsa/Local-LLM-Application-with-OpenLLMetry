@@ -1,0 +1,52 @@
+services:
+
+  # -----------------------------------------------------------------------
+  # FastAPI backend — OpenAI-compatible proxy in front of host Ollama
+  # -----------------------------------------------------------------------
+  backend:
+    build: ./backend
+    container_name: llm-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Connect to Ollama running on the host machine
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma4:26b}
+      # OpenLLMetry → Dynatrace OTLP export
+      - TRACELOOP_BASE_URL=${TRACELOOP_BASE_URL}
+      - TRACELOOP_HEADERS=Authorization=Api-Token%20${DT_OTLP_TOKEN}
+      # OTel metrics export (Traceloop only does traces)
+      - DT_OTLP_TOKEN=${DT_OTLP_TOKEN}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
+  # Open WebUI — chat frontend connected to host Ollama + FastAPI backend
+  # -----------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      # Disable direct Ollama connection — route everything through the
+      # instrumented FastAPI backend so OpenLLMetry captures all LLM traces
+      - ENABLE_OLLAMA_API=false
+      # OpenAI-compatible connection to the FastAPI backend (sole model source)
+      - OPENAI_API_BASE_URL=http://backend:8000/v1
+      - OPENAI_API_KEY=ollama-local
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-me-in-production}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - open-webui-data:/app/backend/data
+      - ./open-webui/custom.css:/app/custom.css:ro
+      - ./open-webui/entrypoint.sh:/app/custom-entrypoint.sh:ro
+    entrypoint: ["bash", "/app/custom-entrypoint.sh"]
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  open-webui-data:

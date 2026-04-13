@@ -1,0 +1,152 @@
+/* ================================================================
+   Serif Typography Override for Open WebUI
+   ================================================================ */
+
+/* Import Google Fonts — Playfair Display for headings, Lora for body */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,500&display=swap');
+
+:root {
+  --font-serif-body: 'Lora', 'Source Serif 4', 'Georgia', 'Times New Roman', serif;
+  --font-serif-heading: 'Playfair Display', 'Georgia', serif;
+}
+
+/* ── Global base ─────────────────────────────────────────────────── */
+html,
+body {
+  font-family: var(--font-serif-body) !important;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Everything inside the app ───────────────────────────────────── */
+*:not(code):not(pre):not(pre *):not(.hljs):not(.hljs *):not(
+    [class*="monaco"]):not([class*="monaco"] *) {
+  font-family: var(--font-serif-body) !important;
+}
+
+/* ── Headings ────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6,
+[class*="title"],
+[class*="heading"] {
+  font-family: var(--font-serif-heading) !important;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-weight: 700; }
+h2 { font-weight: 600; }
+h3, h4, h5, h6 { font-weight: 500; }
+
+/* ── Chat messages ───────────────────────────────────────────────── */
+.prose,
+.prose *:not(code):not(pre):not(pre *) {
+  font-family: var(--font-serif-body) !important;
+}
+
+.prose {
+  font-size: 1.05rem;
+  line-height: 1.75;
+}
+
+.prose p {
+  margin-bottom: 0.85em;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--font-serif-heading) !important;
+  line-height: 1.3;
+  margin-top: 1.4em;
+  margin-bottom: 0.6em;
+}
+
+.prose blockquote {
+  font-style: italic;
+  border-left: 3px solid currentColor;
+  opacity: 0.85;
+}
+
+.prose li {
+  line-height: 1.7;
+}
+
+/* ── Chat input / textarea ───────────────────────────────────────── */
+textarea,
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="password"] {
+  font-family: var(--font-serif-body) !important;
+  font-size: 1.02rem;
+}
+
+/* ── Buttons and UI labels ───────────────────────────────────────── */
+button,
+[role="button"],
+label,
+select,
+option {
+  font-family: var(--font-serif-body) !important;
+}
+
+/* ── Sidebar / navigation ────────────────────────────────────────── */
+nav,
+nav *:not(svg):not(path),
+aside,
+aside *:not(svg):not(path) {
+  font-family: var(--font-serif-body) !important;
+}
+
+/* ── Model selector / dropdowns ──────────────────────────────────── */
+[class*="select"],
+[class*="dropdown"],
+[class*="menu"],
+[class*="popover"] {
+  font-family: var(--font-serif-body) !important;
+}
+
+/* ── Code blocks — keep monospace ────────────────────────────────── */
+code,
+pre,
+pre *,
+.hljs,
+.hljs *,
+[class*="code"],
+[class*="mono"],
+kbd,
+samp {
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace !important;
+}
+
+/* Code block styling adjustments for contrast with serif text */
+pre {
+  border-radius: 6px;
+  margin: 1em 0;
+}
+
+code:not(pre code) {
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  font-size: 0.88em;
+}
+
+/* ── Markdown rendered content ───────────────────────────────────── */
+.markdown,
+.markdown *:not(code):not(pre):not(pre *) {
+  font-family: var(--font-serif-body) !important;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-family: var(--font-serif-heading) !important;
+}
+
+/* ── Tooltips and toasts ─────────────────────────────────────────── */
+[role="tooltip"],
+[class*="toast"],
+[class*="notification"] {
+  font-family: var(--font-serif-body) !important;
+}
