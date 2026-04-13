@@ -323,6 +323,13 @@ async def chat_completions(request: ChatCompletionRequest):
     # Opt-in: prompt / input messages
     span.set_attribute("gen_ai.prompt", json.dumps(messages_raw))
     span.set_attribute("gen_ai.input.messages", _format_input_messages(messages_raw))
+    # Indexed prompt attributes (OpenLLMetry format — Dynatrace native mapping)
+    for i, m in enumerate(messages_raw):
+        span.set_attribute(f"gen_ai.prompt.{i}.role", m["role"])
+        span.set_attribute(f"gen_ai.prompt.{i}.content", m["content"])
+    # LLM attributes
+    span.set_attribute("llm.request_type", "chat")
+    span.set_attribute("llm.is_streaming", request.stream or False)
 
     ollama_payload: dict = {
         "model": model,
@@ -374,6 +381,10 @@ async def chat_completions(request: ChatCompletionRequest):
     span.set_attribute("gen_ai.response.finish_reasons", json.dumps(finish_reasons))
     span.set_attribute("gen_ai.completion", response_content)
     span.set_attribute("gen_ai.output.messages", _format_output_messages(response_content, finish_reasons[0] if finish_reasons else "stop"))
+    # Indexed completion attributes (OpenLLMetry format — Dynatrace native mapping)
+    for i, choice in enumerate(result.get("choices", [])):
+        span.set_attribute(f"gen_ai.completion.{i}.finish_reason", choice.get("finish_reason", "stop"))
+        span.set_attribute(f"gen_ai.completion.{i}.content", choice.get("message", {}).get("content", ""))
     span.set_attribute("gen_ai.usage.input_tokens", prompt_toks)
     span.set_attribute("gen_ai.usage.output_tokens", completion_toks)
     span.set_attribute("gen_ai.usage.prompt_tokens", prompt_toks)
@@ -418,6 +429,12 @@ async def _stream_ollama(payload: dict, model: str):
     span.set_attribute("gen_ai.output.type", "text")
     span.set_attribute("server.address", _OLLAMA_HOST)
     span.set_attribute("server.port", _OLLAMA_PORT)
+    # LLM + indexed prompt attributes (OpenLLMetry format — Dynatrace native mapping)
+    span.set_attribute("llm.request_type", "chat")
+    span.set_attribute("llm.is_streaming", True)
+    for i, m in enumerate(payload.get("messages", [])):
+        span.set_attribute(f"gen_ai.prompt.{i}.role", m["role"])
+        span.set_attribute(f"gen_ai.prompt.{i}.content", m["content"])
     full_response_parts: list[str] = []
     chunk_count = 0
     async with httpx.AsyncClient(timeout=300.0) as client:
@@ -474,6 +491,9 @@ async def _stream_ollama(payload: dict, model: str):
                         span.set_attribute("gen_ai.response.finish_reasons", json.dumps(["stop"]))
                         span.set_attribute("gen_ai.completion", full_text)
                         span.set_attribute("gen_ai.output.messages", _format_output_messages(full_text))
+                        # Indexed completion attributes (Dynatrace native mapping)
+                        span.set_attribute("gen_ai.completion.0.content", full_text)
+                        span.set_attribute("gen_ai.completion.0.finish_reason", "stop")
                         span.set_attribute("gen_ai.usage.input_tokens", prompt_toks)
                         span.set_attribute("gen_ai.usage.output_tokens", completion_toks)
                         span.set_attribute("gen_ai.usage.prompt_tokens", prompt_toks)
@@ -528,6 +548,12 @@ async def _non_stream_ollama(payload: dict, model: str) -> dict:
     span.set_attribute("gen_ai.request.model", model)
     span.set_attribute("server.address", _OLLAMA_HOST)
     span.set_attribute("server.port", _OLLAMA_PORT)
+    # LLM + indexed prompt attributes (OpenLLMetry format — Dynatrace native mapping)
+    span.set_attribute("llm.request_type", "chat")
+    span.set_attribute("llm.is_streaming", False)
+    for i, m in enumerate(payload.get("messages", [])):
+        span.set_attribute(f"gen_ai.prompt.{i}.role", m["role"])
+        span.set_attribute(f"gen_ai.prompt.{i}.content", m["content"])
     async with httpx.AsyncClient(timeout=300.0) as client:
         try:
             with _tracer.start_as_current_span(
@@ -579,6 +605,9 @@ async def _non_stream_ollama(payload: dict, model: str) -> dict:
     span.set_attribute("gen_ai.response.finish_reasons", json.dumps(["stop"]))
     span.set_attribute("gen_ai.usage.input_tokens", prompt_tokens)
     span.set_attribute("gen_ai.usage.output_tokens", completion_tokens)
+    # Indexed completion attributes (Dynatrace native mapping)
+    span.set_attribute("gen_ai.completion.0.content", content)
+    span.set_attribute("gen_ai.completion.0.finish_reason", "stop")
 
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
