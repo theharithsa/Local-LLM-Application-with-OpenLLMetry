@@ -4,14 +4,21 @@ services:
   # FastAPI backend — OpenAI-compatible proxy in front of host Ollama
   # -----------------------------------------------------------------------
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: llm-backend
     ports:
       - "8000:8000"
     environment:
-      # Connect to Ollama running on the host machine
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # LLM provider config (ollama | openai | anthropic | vllm | llamacpp | groq | together)
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434}
+      - LLM_API_KEY=${LLM_API_KEY:-}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma4:26b}
+      - APP_NAME=${APP_NAME:-local-llm-backend}
+      # Legacy Ollama fallback (used if LLM_BASE_URL is empty)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       # OpenLLMetry → Dynatrace OTLP export
       - TRACELOOP_BASE_URL=${TRACELOOP_BASE_URL}
       - TRACELOOP_HEADERS=Authorization=Api-Token%20${DT_OTLP_TOKEN}

@@ -1,3 +1,9 @@
+"""
+{{ cookiecutter.project_name }} — LLM API Bridge with full GenAI observability.
+
+Provider-agnostic FastAPI backend powered by llm-otel-kit.
+"""
+
 import json
 import os
 import time
@@ -35,10 +41,9 @@ logger = otel.logger
 m = GenAIMetrics(otel.meter)
 _tracer = otel.tracer
 
-app = FastAPI(title="LLM API Bridge", version="2.0.0")
+app = FastAPI(title="{{ cookiecutter.project_name }} API", version="1.0.0")
 
 DEFAULT_MODEL = config.provider.default_model
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,9 +54,9 @@ app.add_middleware(
 )
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 # Pydantic schemas
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 
 class Message(BaseModel):
     role: str
@@ -67,9 +72,9 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = None
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 # Endpoints
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
@@ -118,9 +123,9 @@ async def chat_completions(request: ChatCompletionRequest, raw_request: Request)
     return await _non_stream_llm(payload, model, messages_raw, extra_ctx)
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 # gen_ai.chat span — streaming
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 
 @workflow(name="gen_ai.chat")
 async def _stream_llm(payload: dict, model: str,
@@ -138,8 +143,6 @@ async def _stream_llm(payload: dict, model: str,
 
     full_response_parts: list[str] = []
     chunk_count = 0
-    prompt_toks = 0
-    completion_toks = 0
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         with _tracer.start_as_current_span(
@@ -175,28 +178,26 @@ async def _stream_llm(payload: dict, model: str,
 
                     if sc.done:
                         duration = time.time() - stream_start
-                        prompt_toks = sc.prompt_tokens
-                        completion_toks = sc.completion_tokens
                         full_response = "".join(full_response_parts)
 
                         set_genai_response(span, full_response, model,
-                                           prompt_toks, completion_toks)
+                                           sc.prompt_tokens, sc.completion_tokens)
                         http_span.set_attribute("http.response.status_code", 200)
 
                         ttft = sc.timing.ttft if sc.timing.ttft else (
                             (first_token_time - stream_start) if first_token_time else None)
                         tpot = sc.timing.tpot if sc.timing.tpot else (
-                            ((time.time() - first_token_time) / (completion_toks - 1))
-                            if first_token_time and completion_toks > 1 else None)
+                            ((time.time() - first_token_time) / (sc.completion_tokens - 1))
+                            if first_token_time and sc.completion_tokens > 1 else None)
 
                         record_metrics(m, attrs, model, duration,
-                                       prompt_toks, completion_toks, ttft, tpot)
+                                       sc.prompt_tokens, sc.completion_tokens, ttft, tpot)
                         m.stream_chunks.add(chunk_count, {"model": model})
 
                         logger.info("Stream done", extra={
                             "model": model, "duration_s": round(duration, 3),
-                            "prompt_tokens": prompt_toks,
-                            "completion_tokens": completion_toks,
+                            "prompt_tokens": sc.prompt_tokens,
+                            "completion_tokens": sc.completion_tokens,
                         })
                         yield "data: [DONE]\n\n"
                         break
@@ -209,9 +210,9 @@ async def _stream_llm(payload: dict, model: str,
                 raise HTTPException(503, f"Cannot reach {provider.system_name}.")
 
 
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 # gen_ai.chat span — non-streaming
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 
 @workflow(name="gen_ai.chat")
 async def _non_stream_llm(payload: dict, model: str,

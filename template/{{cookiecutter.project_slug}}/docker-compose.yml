@@ -1,0 +1,101 @@
+services:
+
+  # -----------------------------------------------------------------------
+  # FastAPI backend — OpenAI-compatible proxy with GenAI observability
+  # -----------------------------------------------------------------------
+  backend:
+    build: ./backend
+    container_name: {{ cookiecutter.project_slug }}-backend
+    ports:
+      - "{{ cookiecutter.backend_port }}:{{ cookiecutter.backend_port }}"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-{{ cookiecutter.llm_provider }}}
+      - LLM_BASE_URL=${LLM_BASE_URL:-{{ cookiecutter.llm_base_url }}}
+      - LLM_API_KEY=${LLM_API_KEY:-{{ cookiecutter.llm_api_key }}}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-{{ cookiecutter.default_model }}}
+      - APP_NAME=${APP_NAME:-{{ cookiecutter.app_name }}}
+{%- if cookiecutter.observability_backend == 'dynatrace' %}
+      # OpenLLMetry → Dynatrace OTLP export
+      - TRACELOOP_BASE_URL=${TRACELOOP_BASE_URL}
+      - TRACELOOP_HEADERS=Authorization=Api-Token%20${DT_OTLP_TOKEN}
+      - DT_OTLP_TOKEN=${DT_OTLP_TOKEN}
+{%- elif cookiecutter.observability_backend == 'jaeger' %}
+      # OpenLLMetry → Jaeger / OTLP generic
+      - TRACELOOP_BASE_URL=${TRACELOOP_BASE_URL:-http://otel-collector:4318}
+{%- endif %}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+{%- if cookiecutter.observability_backend == 'dynatrace' %}
+
+  # -----------------------------------------------------------------------
+  # OTel Collector — gRPC→HTTP protocol bridge for Dynatrace
+  # -----------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: {{ cookiecutter.project_slug }}-otel-collector
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    environment:
+      - DT_OTLP_ENDPOINT=${TRACELOOP_BASE_URL}
+      - DT_OTLP_TOKEN=${DT_OTLP_TOKEN}
+    restart: unless-stopped
+{%- elif cookiecutter.observability_backend == 'jaeger' %}
+
+  # -----------------------------------------------------------------------
+  # Jaeger — local tracing UI
+  # -----------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: {{ cookiecutter.project_slug }}-jaeger
+    ports:
+      - "16686:16686"    # Jaeger UI
+      - "4317:4317"      # OTLP/gRPC
+      - "4318:4318"      # OTLP/HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: {{ cookiecutter.project_slug }}-otel-collector
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    restart: unless-stopped
+{%- endif %}
+
+  # -----------------------------------------------------------------------
+  # Open WebUI — chat frontend
+  # -----------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: {{ cookiecutter.project_slug }}-webui
+    ports:
+      - "{{ cookiecutter.frontend_port }}:8080"
+    environment:
+      - ENABLE_OLLAMA_API=false
+      - OPENAI_API_BASE_URL=http://backend:{{ cookiecutter.backend_port }}/v1
+      - OPENAI_API_KEY=local
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-me-in-production}
+{%- if cookiecutter.observability_backend != 'none' %}
+      - ENABLE_OTEL=true
+      - ENABLE_OTEL_TRACES=true
+      - ENABLE_OTEL_METRICS=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_SERVICE_NAME=open-webui
+{%- endif %}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - open-webui-data:/app/backend/data
+    depends_on:
+      - backend
+{%- if cookiecutter.observability_backend != 'none' %}
+      - otel-collector
+{%- endif %}
+    restart: unless-stopped
+
+volumes:
+  open-webui-data:

@@ -1,0 +1,622 @@
+{
+  "id": "325333a4-5a37-4ae7-9d0b-484387d111af",
+  "name": "Local LLM Observability",
+  "type": "dashboard",
+  "content": {
+    "version": 21,
+    "variables": [
+      {
+        "type": "code",
+        "key": "service_name",
+        "defaultValue": "local-llm-backend"
+      }
+    ],
+    "settings": {
+      "defaultTimeframe": {
+        "enabled": true,
+        "value": {
+          "from": "now()-2h",
+          "to": "now()"
+        }
+      }
+    },
+    "tiles": {
+      "1": {
+        "type": "markdown",
+        "content": "## Executive Summary\nPlatform health, adoption, and reliability at a glance."
+      },
+      "2": {
+        "type": "data",
+        "title": "Total Conversations",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize val = countDistinct(conversation.fingerprint)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Conversations", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "3": {
+        "type": "data",
+        "title": "Active Users",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize val = countDistinct(enduser.id)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Active Users", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "4": {
+        "type": "data",
+        "title": "Availability SLI",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize total = count(), errors = countIf(status == \"ERROR\")\n| fieldsAdd val = (total - errors) / toDouble(total) * 100",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Availability %", "recordField": "val" },
+          "thresholds": [
+            {
+              "field": "val", "id": "1", "isEnabled": true,
+              "rules": [
+                { "color": { "Default": "#c62239" }, "comparator": "<", "id": "0", "value": 95 },
+                { "color": { "Default": "#eea53c" }, "comparator": "<", "id": "1", "value": 99.5 },
+                { "color": { "Default": "#2f6862" }, "comparator": ">=", "id": "2", "value": 99.5 }
+              ]
+            }
+          ]
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "5": {
+        "type": "data",
+        "title": "Total Requests",
+        "query": "timeseries val = sum(llm.request.count)\n| fieldsAdd total = arraySum(val)\n| fields total",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Total Requests", "recordField": "total" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "6": {
+        "type": "data",
+        "title": "Avg Response Time",
+        "query": "timeseries val = avg(gen_ai.client.operation.duration)\n| fieldsAdd avg_val = arrayAvg(val)\n| fields avg_val",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Avg Response (s)", "recordField": "avg_val" },
+          "thresholds": [
+            {
+              "field": "avg_val", "id": "1", "isEnabled": true,
+              "rules": [
+                { "color": { "Default": "#2f6862" }, "comparator": "<=", "id": "0", "value": 5 },
+                { "color": { "Default": "#eea53c" }, "comparator": "<=", "id": "1", "value": 15 },
+                { "color": { "Default": "#c62239" }, "comparator": ">", "id": "2", "value": 15 }
+              ]
+            }
+          ]
+        },
+        "unitsOverrides": [{ "identifier": "avg_val", "baseUnit": "second", "displayUnit": null, "decimals": 2 }],
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "7": {
+        "type": "data",
+        "title": "Error Rate %",
+        "query": "timeseries errs = sum(llm.request.errors)\n| fieldsAdd total_errs = arraySum(errs)\n| lookup [timeseries reqs = sum(llm.request.count) | fieldsAdd total_reqs = arraySum(reqs) | fields total_reqs], sourceField:total_errs, lookupField:total_reqs\n| fieldsAdd val = if(isNull(total_errs) or isNull(total_reqs) or total_reqs == 0, then:0.0, else:toDouble(total_errs) / toDouble(total_reqs) * 100)\n| fields val",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Error Rate %", "recordField": "val" },
+          "thresholds": [
+            {
+              "field": "val", "id": "1", "isEnabled": true,
+              "rules": [
+                { "color": { "Default": "#2f6862" }, "comparator": "<=", "id": "0", "value": 1 },
+                { "color": { "Default": "#eea53c" }, "comparator": "<=", "id": "1", "value": 5 },
+                { "color": { "Default": "#c62239" }, "comparator": ">", "id": "2", "value": 5 }
+              ]
+            }
+          ]
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "8": {
+        "type": "data",
+        "title": "Request Volume Trend",
+        "query": "timeseries val = sum(llm.request.count)",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "9": {
+        "type": "data",
+        "title": "Request Purpose Breakdown",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize cnt = count(), by:{llm.request.purpose}",
+        "visualization": "pieChart",
+        "querySettings": {},
+        "visualizationSettings": { "autoSelectVisualization": false },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+
+      "10": {
+        "type": "markdown",
+        "content": "## Cost & Token Economics\nToken consumption as a cost proxy — efficiency, spend trajectory, and breakdown by model and purpose."
+      },
+      "11": {
+        "type": "data",
+        "title": "Total Tokens",
+        "query": "timeseries val = sum(gen_ai.client.token.usage)\n| fieldsAdd total = arraySum(val)\n| fields total",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Total Tokens", "recordField": "total" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "12": {
+        "type": "data",
+        "title": "Avg Tokens / Conversation",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize total_input = sum(toDouble(gen_ai.usage.input_tokens)), total_output = sum(toDouble(gen_ai.usage.output_tokens)), convos = countDistinct(conversation.fingerprint)\n| fieldsAdd val = (total_input + total_output) / toDouble(convos)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Tokens / Conversation", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "13": {
+        "type": "data",
+        "title": "Output / Input Ratio",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize total_in = sum(toDouble(gen_ai.usage.input_tokens)), total_out = sum(toDouble(gen_ai.usage.output_tokens))\n| fieldsAdd val = total_out / total_in",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Output / Input Ratio", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "14": {
+        "type": "data",
+        "title": "Token Consumption Trend (I/O)",
+        "query": "timeseries val = sum(gen_ai.client.token.usage), by:{gen_ai.token.type}",
+        "visualization": "areaChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true }, "stacked": true }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "15": {
+        "type": "data",
+        "title": "Token Spend by Model",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize total_tokens = sum(toDouble(gen_ai.usage.input_tokens)) + sum(toDouble(gen_ai.usage.output_tokens)), by:{gen_ai.request.model}",
+        "visualization": "categoricalBarChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "16": {
+        "type": "data",
+        "title": "Token Spend by Purpose",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| summarize total_tokens = sum(toDouble(gen_ai.usage.input_tokens)) + sum(toDouble(gen_ai.usage.output_tokens)), by:{llm.request.purpose}",
+        "visualization": "categoricalBarChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "17": {
+        "type": "data",
+        "title": "Avg Tokens per Request Trend",
+        "query": "timeseries input_sum = sum(gen_ai.client.token.usage)\n| lookup [timeseries req_sum = sum(llm.request.count)], sourceField:timeframe, lookupField:timeframe\n| fieldsAdd avg_tokens_arr = arrayDivide(`sum(gen_ai.client.token.usage)`, `sum(llm.request.count)`)\n| fields timeframe, interval, avg_tokens_arr",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+
+      "18": {
+        "type": "markdown",
+        "content": "## Model Performance Scorecard\nSide-by-side model comparison for hardware and model selection decisions."
+      },
+      "19": {
+        "type": "data",
+        "title": "Model Comparison",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd dur_s = toDouble(duration) / 1000000000.0, in_tok = toDouble(gen_ai.usage.input_tokens), out_tok = toDouble(gen_ai.usage.output_tokens)\n| summarize requests = count(), avg_duration_s = avg(dur_s), p50_duration_s = percentile(dur_s, 50), p95_duration_s = percentile(dur_s, 95), avg_input_tokens = avg(in_tok), avg_output_tokens = avg(out_tok), total_tokens = sum(in_tok) + sum(out_tok), by:{gen_ai.request.model}\n| sort requests desc",
+        "visualization": "table",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "table": { "linewrapEnabled": false }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "20": {
+        "type": "data",
+        "title": "Throughput by Model (tok/s)",
+        "query": "timeseries val = avg(llm.token.throughput), by:{gen_ai.request.model}",
+        "visualization": "barChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "21": {
+        "type": "data",
+        "title": "TTFT by Model",
+        "query": "timeseries val = avg(gen_ai.server.time_to_first_token), by:{gen_ai.request.model}",
+        "visualization": "barChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "22": {
+        "type": "data",
+        "title": "Response Time by Model",
+        "query": "timeseries val = avg(gen_ai.client.operation.duration), by:{gen_ai.request.model}",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "23": {
+        "type": "data",
+        "title": "p95 Latency Trend by Model",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd dur_s = toDouble(duration) / 1000000000.0\n| makeTimeseries p95 = percentile(dur_s, 95), by:{gen_ai.request.model}, interval:5m",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "24": {
+        "type": "data",
+        "title": "Stream vs Non-Stream by Model",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd mode = if(llm.is_streaming == true, then:\"Streaming\", else:\"Non-Streaming\")\n| summarize cnt = count(), by:{gen_ai.request.model, mode}",
+        "visualization": "categoricalBarChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+
+      "25": {
+        "type": "markdown",
+        "content": "## User Experience & Quality\nUser-facing performance SLIs — latency perception, tail performance, and generation quality."
+      },
+      "26": {
+        "type": "data",
+        "title": "TTFT SLI (% < 2s)",
+        "query": "timeseries total_arr = count(gen_ai.server.time_to_first_token)\n| fieldsAdd total = arraySum(total_arr)\n| lookup [timeseries fast_arr = count(gen_ai.server.time_to_first_token, {le=\"2\"}) | fieldsAdd fast = arraySum(fast_arr) | fields fast], sourceField:total, lookupField:fast\n| fieldsAdd val = if(isNull(total) or total == 0, then:100.0, else:toDouble(fast) / toDouble(total) * 100)\n| fields val",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "TTFT < 2s %", "recordField": "val" },
+          "thresholds": [
+            {
+              "field": "val", "id": "1", "isEnabled": true,
+              "rules": [
+                { "color": { "Default": "#c62239" }, "comparator": "<", "id": "0", "value": 80 },
+                { "color": { "Default": "#eea53c" }, "comparator": "<", "id": "1", "value": 95 },
+                { "color": { "Default": "#2f6862" }, "comparator": ">=", "id": "2", "value": 95 }
+              ]
+            }
+          ]
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "27": {
+        "type": "data",
+        "title": "p95 TTFT",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd dur_s = toDouble(duration) / 1000000000.0\n| summarize val = percentile(dur_s, 95)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "p95 TTFT (s)", "recordField": "val" }
+        },
+        "unitsOverrides": [{ "identifier": "val", "baseUnit": "second", "displayUnit": null, "decimals": 2 }],
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "28": {
+        "type": "data",
+        "title": "p95 Response Time",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd dur_s = toDouble(duration) / 1000000000.0\n| summarize val = percentile(dur_s, 95)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "p95 Response (s)", "recordField": "val" },
+          "thresholds": [
+            {
+              "field": "val", "id": "1", "isEnabled": true,
+              "rules": [
+                { "color": { "Default": "#2f6862" }, "comparator": "<=", "id": "0", "value": 10 },
+                { "color": { "Default": "#eea53c" }, "comparator": "<=", "id": "1", "value": 30 },
+                { "color": { "Default": "#c62239" }, "comparator": ">", "id": "2", "value": 30 }
+              ]
+            }
+          ]
+        },
+        "unitsOverrides": [{ "identifier": "val", "baseUnit": "second", "displayUnit": null, "decimals": 2 }],
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "29": {
+        "type": "data",
+        "title": "TTFT Trend",
+        "query": "timeseries val = avg(gen_ai.server.time_to_first_token)",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "30": {
+        "type": "data",
+        "title": "TPOT Trend",
+        "query": "timeseries val = avg(gen_ai.server.time_per_output_token)",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "31": {
+        "type": "data",
+        "title": "Throughput Trend",
+        "query": "timeseries val = avg(llm.token.throughput)",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "32": {
+        "type": "data",
+        "title": "Top 10 Slowest Prompts",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd dur_s = toDouble(duration) / 1000000000.0\n| fieldsAdd prompt_preview = substring(gen_ai.prompt.0.content, from:0, to:200)\n| fields start_time, prompt_preview, gen_ai.request.model, gen_ai.usage.input_tokens, gen_ai.usage.output_tokens, dur_s\n| sort dur_s desc\n| limit 10",
+        "visualization": "table",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "table": { "linewrapEnabled": true }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+
+      "33": {
+        "type": "markdown",
+        "content": "## Open WebUI Operations\nFrontend request latency, database queries, and HTTP activity from the Open WebUI service."
+      },
+      "34": {
+        "type": "data",
+        "title": "WebUI Requests",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and span.kind == \"server\"\n| summarize val = count()",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Total Requests", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "35": {
+        "type": "data",
+        "title": "WebUI Avg Latency",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and span.kind == \"server\"\n| summarize val = avg(duration)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Avg Latency", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "36": {
+        "type": "data",
+        "title": "WebUI Error Rate %",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and span.kind == \"server\"\n| summarize total = count(), errs = countIf(toInt(http.response.status_code) >= 500)\n| fieldsAdd val = if(total == 0, then:0.0, else:toDouble(errs) / toDouble(total) * 100)",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "Error Rate %", "recordField": "val" },
+          "thresholds": [
+            {
+              "field": "val", "id": "1", "isEnabled": true,
+              "rules": [
+                { "color": { "Default": "#2f6862" }, "comparator": "<=", "id": "0", "value": 1 },
+                { "color": { "Default": "#eea53c" }, "comparator": "<=", "id": "1", "value": 5 },
+                { "color": { "Default": "#c62239" }, "comparator": ">", "id": "2", "value": 5 }
+              ]
+            }
+          ]
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "37": {
+        "type": "data",
+        "title": "DB Query Count",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and isNotNull(db.system)\n| summarize val = count()",
+        "visualization": "singleValue",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "singleValue": { "showLabel": true, "label": "DB Queries", "recordField": "val" }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "38": {
+        "type": "data",
+        "title": "WebUI Latency Trend",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and span.kind == \"server\"\n| makeTimeseries avg_dur = avg(duration), interval:5m",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "39": {
+        "type": "data",
+        "title": "DB Query Latency Trend",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and isNotNull(db.system)\n| makeTimeseries avg_dur = avg(duration), interval:5m",
+        "visualization": "lineChart",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "chartSettings": { "legend": { "position": "bottom", "showLegend": true } }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "40": {
+        "type": "data",
+        "title": "Top Endpoints by Volume",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and span.kind == \"server\"\n| summarize cnt = count(), avg_dur = avg(duration), errors = countIf(toInt(http.response.status_code) >= 500), by:{http.route, http.request.method}\n| sort cnt desc\n| limit 15",
+        "visualization": "table",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "table": { "linewrapEnabled": false }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "41": {
+        "type": "data",
+        "title": "Slowest DB Queries",
+        "query": "fetch spans\n| filter service.name == \"open-webui\" and isNotNull(db.system)\n| fieldsAdd duration_ms = toDouble(duration) / 1000000\n| fields start_time, db.system, db.statement, duration_ms\n| sort duration_ms desc\n| limit 10",
+        "visualization": "table",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "table": { "linewrapEnabled": true }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+
+      "42": {
+        "type": "markdown",
+        "content": "## Traces & Logs\nRecent LLM traces and backend log stream for drill-down debugging."
+      },
+      "43": {
+        "type": "data",
+        "title": "Recent GenAI Traces",
+        "query": "fetch spans\n| filter isNotNull(gen_ai.system) and service.name == $service_name\n| fieldsAdd dur_s = toDouble(duration) / 1000000000.0\n| fields start_time, trace.id, span.name, gen_ai.request.model, llm.request.purpose, gen_ai.usage.input_tokens, gen_ai.usage.output_tokens, dur_s\n| sort start_time desc\n| limit 20",
+        "visualization": "table",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "table": { "linewrapEnabled": false }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      },
+      "44": {
+        "type": "data",
+        "title": "Recent Backend Logs",
+        "query": "fetch logs\n| filter isNotNull(trace_id)\n| filter otel.scope.name == $service_name\n| fields timestamp, content, loglevel, model, duration_s, prompt_tokens, completion_tokens, trace_id\n| sort timestamp desc\n| limit 20",
+        "visualization": "table",
+        "querySettings": {},
+        "visualizationSettings": {
+          "autoSelectVisualization": false,
+          "table": { "linewrapEnabled": false }
+        },
+        "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } }
+      }
+    },
+    "layouts": {
+      "1":  { "x": 0,  "y": 0,  "w": 20, "h": 1 },
+      "2":  { "x": 0,  "y": 1,  "w": 4,  "h": 3 },
+      "3":  { "x": 4,  "y": 1,  "w": 4,  "h": 3 },
+      "4":  { "x": 8,  "y": 1,  "w": 4,  "h": 3 },
+      "5":  { "x": 12, "y": 1,  "w": 4,  "h": 3 },
+      "6":  { "x": 16, "y": 1,  "w": 4,  "h": 3 },
+      "7":  { "x": 0,  "y": 4,  "w": 10, "h": 3 },
+      "8":  { "x": 0,  "y": 7,  "w": 13, "h": 6 },
+      "9":  { "x": 13, "y": 7,  "w": 7,  "h": 6 },
+
+      "10": { "x": 0,  "y": 13, "w": 20, "h": 1 },
+      "11": { "x": 0,  "y": 14, "w": 5,  "h": 3 },
+      "12": { "x": 5,  "y": 14, "w": 5,  "h": 3 },
+      "13": { "x": 10, "y": 14, "w": 5,  "h": 3 },
+      "14": { "x": 0,  "y": 17, "w": 10, "h": 6 },
+      "15": { "x": 10, "y": 17, "w": 10, "h": 6 },
+      "16": { "x": 0,  "y": 23, "w": 10, "h": 6 },
+      "17": { "x": 10, "y": 23, "w": 10, "h": 6 },
+
+      "18": { "x": 0,  "y": 29, "w": 20, "h": 1 },
+      "19": { "x": 0,  "y": 30, "w": 20, "h": 6 },
+      "20": { "x": 0,  "y": 36, "w": 10, "h": 6 },
+      "21": { "x": 10, "y": 36, "w": 10, "h": 6 },
+      "22": { "x": 0,  "y": 42, "w": 10, "h": 6 },
+      "23": { "x": 10, "y": 42, "w": 10, "h": 6 },
+      "24": { "x": 0,  "y": 48, "w": 20, "h": 6 },
+
+      "25": { "x": 0,  "y": 54, "w": 20, "h": 1 },
+      "26": { "x": 0,  "y": 55, "w": 5,  "h": 3 },
+      "27": { "x": 5,  "y": 55, "w": 5,  "h": 3 },
+      "28": { "x": 10, "y": 55, "w": 5,  "h": 3 },
+      "29": { "x": 0,  "y": 58, "w": 7,  "h": 6 },
+      "30": { "x": 7,  "y": 58, "w": 7,  "h": 6 },
+      "31": { "x": 14, "y": 58, "w": 6,  "h": 6 },
+      "32": { "x": 0,  "y": 64, "w": 20, "h": 7 },
+
+      "33": { "x": 0,  "y": 71, "w": 20, "h": 1 },
+      "34": { "x": 0,  "y": 72, "w": 5,  "h": 3 },
+      "35": { "x": 5,  "y": 72, "w": 5,  "h": 3 },
+      "36": { "x": 10, "y": 72, "w": 5,  "h": 3 },
+      "37": { "x": 15, "y": 72, "w": 5,  "h": 3 },
+      "38": { "x": 0,  "y": 75, "w": 10, "h": 6 },
+      "39": { "x": 10, "y": 75, "w": 10, "h": 6 },
+      "40": { "x": 0,  "y": 81, "w": 20, "h": 7 },
+      "41": { "x": 0,  "y": 88, "w": 20, "h": 7 },
+
+      "42": { "x": 0,  "y": 95, "w": 20, "h": 1 },
+      "43": { "x": 0,  "y": 96, "w": 20, "h": 7 },
+      "44": { "x": 0,  "y": 103,"w": 20, "h": 7 }
+    }
+  }
+}

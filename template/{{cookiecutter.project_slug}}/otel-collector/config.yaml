@@ -1,0 +1,54 @@
+{%- if cookiecutter.observability_backend == 'dynatrace' %}
+# OTel Collector — gRPC→HTTP protocol bridge for Dynatrace
+# Receives gRPC from Open WebUI, exports OTLP/HTTP to Dynatrace.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  cumulativetodelta:
+
+exporters:
+  otlp_http:
+    endpoint: ${env:DT_OTLP_ENDPOINT}
+    headers:
+      Authorization: "Api-Token ${env:DT_OTLP_TOKEN}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp_http]
+    metrics:
+      receivers: [otlp]
+      processors: [cumulativetodelta]
+      exporters: [otlp_http]
+{%- elif cookiecutter.observability_backend == 'jaeger' %}
+# OTel Collector — routes telemetry to Jaeger
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      exporters: [otlp/jaeger]
+{%- endif %}

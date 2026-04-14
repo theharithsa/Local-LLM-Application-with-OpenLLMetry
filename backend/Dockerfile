@@ -2,11 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies first (better layer caching)
-COPY requirements.txt .
+# Copy the llm-otel-kit package first (dependency of requirements.txt)
+COPY llm-otel-kit /app/llm-otel-kit
+
+# Install dependencies (better layer caching)
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY backend/ .
 
 EXPOSE 8000
 

@@ -1,0 +1,15 @@
+{
+  "project_name": "My LLM App",
+  "project_slug": "{{ cookiecutter.project_name.lower().replace(' ', '-').replace('_', '-') }}",
+  "app_name": "{{ cookiecutter.project_slug }}-backend",
+  "llm_provider": ["ollama", "openai", "anthropic", "vllm", "groq", "together", "llamacpp", "lmstudio"],
+  "llm_base_url": "http://host.docker.internal:11434",
+  "llm_api_key": "",
+  "default_model": "gemma4:26b",
+  "observability_backend": ["dynatrace", "jaeger", "none"],
+  "otlp_endpoint": "",
+  "backend_port": "8000",
+  "frontend_port": "3000",
+  "include_dashboard": ["yes", "no"],
+  "include_rum": ["yes", "no"]
+}
