@@ -22,6 +22,20 @@ services:
     restart: unless-stopped
 
   # -----------------------------------------------------------------------
+  # OTel Collector — gRPC→HTTP protocol bridge for Dynatrace
+  # Open WebUI only supports gRPC export; Dynatrace requires OTLP/HTTP.
+  # -----------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    environment:
+      - DT_OTLP_ENDPOINT=${TRACELOOP_BASE_URL}
+      - DT_OTLP_TOKEN=${DT_OTLP_TOKEN}
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
   # Open WebUI — chat frontend connected to host Ollama + FastAPI backend
   # -----------------------------------------------------------------------
   open-webui:
@@ -37,6 +51,13 @@ services:
       - OPENAI_API_BASE_URL=http://backend:8000/v1
       - OPENAI_API_KEY=ollama-local
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-change-me-in-production}
+      # Open WebUI native OTel — export via gRPC to the local collector
+      - ENABLE_OTEL=true
+      - ENABLE_OTEL_TRACES=true
+      - ENABLE_OTEL_METRICS=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_SERVICE_NAME=open-webui
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -46,6 +67,7 @@ services:
     entrypoint: ["bash", "/app/custom-entrypoint.sh"]
     depends_on:
       - backend
+      - otel-collector
     restart: unless-stopped
 
 volumes:

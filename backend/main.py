@@ -1,6 +1,5 @@
 import hashlib
 import json
-import logging
 import os
 import time
 import uuid
@@ -12,172 +11,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
-from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import workflow
+from opentelemetry import trace
 
-from opentelemetry.sdk.metrics import MeterProvider, Counter, Histogram, UpDownCounter
-from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
-from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-from opentelemetry.sdk.metrics.export import (
-    PeriodicExportingMetricReader,
-    AggregationTemporality,
-)
-from opentelemetry import metrics, trace
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry._logs import set_logger_provider
+from otel_setup import init_observability, GenAIMetrics
 
 # ---------------------------------------------------------------------------
-# OTel Metrics — set up BEFORE Traceloop.init() so it doesn't conflict
-# Dynatrace requires DELTA temporality for counters/histograms.
+# Bootstrap observability (metrics → logs → tracing, order matters)
 # ---------------------------------------------------------------------------
-_DT_OTLP_BASE = os.getenv("TRACELOOP_BASE_URL", "")
-_DT_OTLP_TOKEN = os.getenv("DT_OTLP_TOKEN", "")
+otel = init_observability("local-llm-backend")
 
-# Histogram bucket boundaries per OTel GenAI semconv
-_DURATION_BUCKETS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56,
-                     5.12, 10.24, 20.48, 40.96, 81.92]
-_TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144,
-                  1048576, 4194304, 16777216, 67108864]
-_TTFT_BUCKETS = [0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25,
-                 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]
-_TPOT_BUCKETS = [0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
-                 0.75, 1.0, 2.5]
-
-if _DT_OTLP_BASE:
-    _metric_exporter = OTLPMetricExporter(
-        endpoint=f"{_DT_OTLP_BASE}/v1/metrics",
-        headers={"Authorization": f"Api-Token {_DT_OTLP_TOKEN}"},
-        preferred_temporality={
-            Counter: AggregationTemporality.DELTA,
-            Histogram: AggregationTemporality.DELTA,
-            UpDownCounter: AggregationTemporality.CUMULATIVE,
-        },
-    )
-    _metric_reader = PeriodicExportingMetricReader(
-        _metric_exporter, export_interval_millis=30_000
-    )
-    _meter_provider = MeterProvider(
-        metric_readers=[_metric_reader],
-        views=[
-            View(instrument_name="gen_ai.client.operation.duration",
-                 aggregation=ExplicitBucketHistogramAggregation(boundaries=_DURATION_BUCKETS)),
-            View(instrument_name="gen_ai.client.token.usage",
-                 aggregation=ExplicitBucketHistogramAggregation(boundaries=_TOKEN_BUCKETS)),
-            View(instrument_name="gen_ai.server.time_to_first_token",
-                 aggregation=ExplicitBucketHistogramAggregation(boundaries=_TTFT_BUCKETS)),
-            View(instrument_name="gen_ai.server.time_per_output_token",
-                 aggregation=ExplicitBucketHistogramAggregation(boundaries=_TPOT_BUCKETS)),
-        ],
-    )
-    metrics.set_meter_provider(_meter_provider)
-
-# ---------------------------------------------------------------------------
-# OTel Logs — export Python logs to Dynatrace with trace_id correlation
-# ---------------------------------------------------------------------------
-if _DT_OTLP_BASE:
-    _log_exporter = OTLPLogExporter(
-        endpoint=f"{_DT_OTLP_BASE}/v1/logs",
-        headers={"Authorization": f"Api-Token {_DT_OTLP_TOKEN}"},
-    )
-    _logger_provider = LoggerProvider()
-    _logger_provider.add_log_record_processor(BatchLogRecordProcessor(_log_exporter))
-    set_logger_provider(_logger_provider)
-
-    _otel_handler = LoggingHandler(
-        level=logging.INFO, logger_provider=_logger_provider
-    )
-    logging.getLogger().addHandler(_otel_handler)
-    logging.getLogger().setLevel(logging.INFO)
-
-logger = logging.getLogger("local-llm-backend")
-
-# ---------------------------------------------------------------------------
-# OpenLLMetry — traces (auto-instruments FastAPI, httpx, LLM calls)
-# Must come AFTER MeterProvider so it doesn't override ours.
-# ---------------------------------------------------------------------------
-Traceloop.init(app_name="local-llm-backend", disable_batch=False)
-
-_meter = metrics.get_meter("local-llm-backend", "1.0.0")
-
-# ---------------------------------------------------------------------------
-# OTel GenAI semantic convention metrics
-# ---------------------------------------------------------------------------
-
-# Required: gen_ai.client.operation.duration (histogram, seconds)
-genai_client_operation_duration = _meter.create_histogram(
-    name="gen_ai.client.operation.duration",
-    description="GenAI operation duration",
-    unit="s",
-)
-
-# Recommended: gen_ai.client.token.usage (histogram, tokens)
-genai_client_token_usage = _meter.create_histogram(
-    name="gen_ai.client.token.usage",
-    description="Number of input and output tokens used",
-    unit="{token}",
-)
-
-# Recommended: gen_ai.server.time_to_first_token (histogram, seconds)
-genai_server_ttft = _meter.create_histogram(
-    name="gen_ai.server.time_to_first_token",
-    description="Time to generate first token",
-    unit="s",
-)
-
-# Recommended: gen_ai.server.time_per_output_token (histogram, seconds)
-genai_server_tpot = _meter.create_histogram(
-    name="gen_ai.server.time_per_output_token",
-    description="Time per output token generated after the first token",
-    unit="s",
-)
-
-# ---------------------------------------------------------------------------
-# Operational / custom metrics
-# ---------------------------------------------------------------------------
-
-# Total requests counter (kept from before, useful for rate)
-llm_request_counter = _meter.create_counter(
-    name="llm.request.count",
-    description="Total LLM chat completion requests",
-    unit="1",
-)
-
-# Error counter
-llm_error_counter = _meter.create_counter(
-    name="llm.request.errors",
-    description="Total failed LLM requests",
-    unit="1",
-)
-
-# Active (in-flight) requests gauge
-llm_active_requests = _meter.create_up_down_counter(
-    name="llm.request.active",
-    description="Number of in-flight LLM requests",
-    unit="1",
-)
-
-# Streaming chunks counter
-llm_stream_chunks = _meter.create_counter(
-    name="llm.stream.chunks",
-    description="Total streaming chunks sent to clients",
-    unit="1",
-)
-
-# Token throughput (tokens / second)
-llm_token_throughput = _meter.create_histogram(
-    name="llm.token.throughput",
-    description="Output token generation throughput",
-    unit="{token}/s",
-)
-
-# Request message count histogram
-llm_request_message_count = _meter.create_histogram(
-    name="llm.request.message_count",
-    description="Number of messages in the prompt",
-    unit="1",
-)
+logger = otel.logger
+m = GenAIMetrics(otel.meter)
+_tracer = otel.tracer
 
 app = FastAPI(title="Local LLM API Bridge", version="1.0.0")
 
@@ -188,38 +34,152 @@ _parsed_ollama = urlparse(OLLAMA_BASE_URL)
 _OLLAMA_HOST = _parsed_ollama.hostname or "localhost"
 _OLLAMA_PORT = _parsed_ollama.port or 11434
 
-_tracer = trace.get_tracer("local-llm-backend", "1.0.0")
+# Model-name prefix → provider mapping
+_PROVIDER_PATTERNS: list[tuple[list[str], str]] = [
+    (["gpt-", "o1-", "o3-", "o4-", "dall-e", "text-embedding"], "openai"),
+    (["claude-"], "anthropic"),
+    (["gemini-"], "google"),
+    (["copilot-", "github/"], "github.copilot"),
+    (["mistral-", "mixtral-", "codestral-"], "mistral"),
+    (["command-", "embed-"], "cohere"),
+    (["deepseek-"], "deepseek"),
+]
+
+_MAX_CONTENT_LEN = 500  # Truncate prompt/response in span events
 
 
-def _format_input_messages(messages: list[dict]) -> str:
-    """Format messages per OTel GenAI input messages JSON schema."""
-    return json.dumps([
-        {
-            "role": m["role"],
-            "parts": [{"type": "text", "content": m["content"]}],
-        }
-        for m in messages
-    ])
-
-
-def _format_output_messages(content: str, finish_reason: str = "stop") -> str:
-    """Format output per OTel GenAI output messages JSON schema."""
-    return json.dumps([{
-        "role": "assistant",
-        "parts": [{"type": "text", "content": content}],
-        "finish_reason": finish_reason,
-    }])
+def _detect_provider(model: str) -> str:
+    model_lower = model.lower()
+    for prefixes, provider in _PROVIDER_PATTERNS:
+        if any(model_lower.startswith(p) for p in prefixes):
+            return provider
+    return "ollama"
 
 
 def _classify_request(messages: list[dict]) -> str:
-    """Classify an Open WebUI request as user_chat, title_generation, or tag_generation."""
     last_content = (messages[-1].get("content", "") if messages else "").lower()
     if "generate a concise" in last_content and "title" in last_content:
-        return "title_generation"
+        return "Title Generation"
     if ("generate tags" in last_content or "categorize" in last_content
             or "tag the conversation" in last_content):
-        return "tag_generation"
-    return "user_chat"
+        return "Tag Generation"
+    if "follow-up" in last_content or ("suggest" in last_content and "question" in last_content):
+        return "Suggestion Generation"
+    if messages and all(msg.get("role") == "system" for msg in messages):
+        return "System Prompt"
+    return "User Chat"
+
+
+def _truncate(text: str) -> str:
+    return text[:_MAX_CONTENT_LEN] + "..." if len(text) > _MAX_CONTENT_LEN else text
+
+
+def _semconv_attrs(model: str) -> dict:
+    """Common GenAI semconv metric attributes."""
+    return {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.system": _detect_provider(model),
+        "gen_ai.request.model": model,
+        "gen_ai.response.model": model,
+        "server.address": _OLLAMA_HOST,
+        "server.port": _OLLAMA_PORT,
+    }
+
+
+def _set_genai_span(span, model: str, request_type: str, stream: bool,
+                    messages: list[dict], extra_ctx: dict):
+    """Set all gen_ai.* span attributes and input span events."""
+    provider = _detect_provider(model)
+
+    # Span name: e.g. "User Chat · gemma4:26b"
+    span.update_name(f"{request_type} · {model}")
+
+    # --- Required gen_ai.* attributes (OTel GenAI semconv) ---
+    span.set_attribute("gen_ai.system", provider)
+    span.set_attribute("gen_ai.provider.name", provider)
+    span.set_attribute("gen_ai.operation.name", "chat")
+    span.set_attribute("gen_ai.request.model", model)
+    span.set_attribute("llm.request.type", "chat")
+    span.set_attribute("llm.is_streaming", stream)
+    span.set_attribute("llm.request.purpose", request_type)
+    span.set_attribute("server.address", _OLLAMA_HOST)
+    span.set_attribute("server.port", _OLLAMA_PORT)
+
+    # --- Optional request params ---
+    if extra_ctx.get("temperature") is not None:
+        span.set_attribute("gen_ai.request.temperature", extra_ctx["temperature"])
+    if extra_ctx.get("top_p") is not None:
+        span.set_attribute("gen_ai.request.top_p", extra_ctx["top_p"])
+    if extra_ctx.get("max_tokens") is not None:
+        span.set_attribute("gen_ai.request.max_tokens", extra_ctx["max_tokens"])
+
+    # --- Indexed prompt attributes (for Dynatrace) ---
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            span.set_attribute("gen_ai.prompt.0.role", "user")
+            span.set_attribute("gen_ai.prompt.0.content", msg.get("content", ""))
+            break
+
+    # --- Span event: gen_ai.user.message (OTel best practice) ---
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            span.add_event("gen_ai.user.message", {
+                "gen_ai.prompt.role": "user",
+                "gen_ai.prompt.content": _truncate(msg.get("content", "")),
+            })
+            break
+
+    # --- Correlation ---
+    user_msgs = [msg["content"] for msg in messages if msg["role"] == "user"]
+    fingerprint_input = user_msgs[0][:200] if (request_type != "User Chat" and user_msgs) else "|".join(user_msgs)
+    span.set_attribute("conversation.fingerprint",
+                       hashlib.sha256(fingerprint_input.encode()).hexdigest()[:12])
+    auth_header = extra_ctx.get("auth_header", "")
+    if auth_header:
+        span.set_attribute("enduser.id", hashlib.sha256(auth_header.encode()).hexdigest()[:8])
+
+
+def _set_genai_response(span, content: str, model: str,
+                        prompt_toks: int, completion_toks: int,
+                        finish_reason: str = "stop", resp_id: str = ""):
+    """Set response attributes and span event on the gen_ai.chat span."""
+    # --- Indexed completion attributes (for Dynatrace) ---
+    span.set_attribute("gen_ai.completion.0.role", "assistant")
+    span.set_attribute("gen_ai.completion.0.content", content)
+    span.set_attribute("gen_ai.completion.0.finish_reason", finish_reason)
+
+    # --- Required response attributes ---
+    span.set_attribute("gen_ai.response.model", model)
+    span.set_attribute("gen_ai.response.finish_reasons", json.dumps([finish_reason]))
+    span.set_attribute("gen_ai.usage.input_tokens", prompt_toks)
+    span.set_attribute("gen_ai.usage.output_tokens", completion_toks)
+    span.set_attribute("gen_ai.usage.prompt_tokens", prompt_toks)
+    span.set_attribute("gen_ai.usage.completion_tokens", completion_toks)
+    if resp_id:
+        span.set_attribute("gen_ai.response.id", resp_id)
+
+    # --- Span event: gen_ai.assistant.message ---
+    span.add_event("gen_ai.assistant.message", {
+        "gen_ai.completion.role": "assistant",
+        "gen_ai.completion.content": _truncate(content),
+        "gen_ai.completion.finish_reason": finish_reason,
+    })
+
+
+def _record_metrics(attrs: dict, model: str, duration: float,
+                    prompt_toks: int, completion_toks: int,
+                    ttft: float | None = None, tpot: float | None = None):
+    m.operation_duration.record(duration, attrs)
+    m.token_usage.record(prompt_toks, {**attrs, "gen_ai.token.type": "input"})
+    m.token_usage.record(completion_toks, {**attrs, "gen_ai.token.type": "output"})
+    if ttft is not None:
+        m.ttft.record(ttft, attrs)
+    if tpot is not None:
+        m.tpot.record(tpot, attrs)
+    if duration > 0 and completion_toks > 0:
+        m.token_throughput.record(completion_toks / duration, attrs)
+    m.active_requests.add(-1, {"model": model})
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -231,7 +191,7 @@ app.add_middleware(
 
 
 # --------------------------------------------------------------------------- #
-# Pydantic schemas (OpenAI-compatible)
+# Pydantic schemas
 # --------------------------------------------------------------------------- #
 
 class Message(BaseModel):
@@ -249,18 +209,13 @@ class ChatCompletionRequest(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Health check
+# Endpoints
 # --------------------------------------------------------------------------- #
 
 @app.get("/health")
 async def health():
-    """Liveness probe – returns OK when the service is up."""
     return {"status": "ok"}
 
-
-# --------------------------------------------------------------------------- #
-# /v1/models  –  list models available in Ollama
-# --------------------------------------------------------------------------- #
 
 @app.get("/v1/models")
 async def list_models():
@@ -269,108 +224,42 @@ async def list_models():
             response = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
             response.raise_for_status()
             ollama_models = response.json().get("models", [])
-            data = [
-                {
-                    "id": m["name"],
-                    "object": "model",
-                    "created": int(time.time()),
-                    "owned_by": "ollama",
-                }
-                for m in ollama_models
-            ]
-            return {"object": "list", "data": data}
+            return {
+                "object": "list",
+                "data": [
+                    {"id": mdl["name"], "object": "model",
+                     "created": int(time.time()), "owned_by": "ollama"}
+                    for mdl in ollama_models
+                ],
+            }
         except httpx.ConnectError:
-            raise HTTPException(
-                status_code=503,
-                detail="Cannot reach Ollama. Make sure it is running on the host.",
-            )
+            raise HTTPException(503, "Cannot reach Ollama.")
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
+            raise HTTPException(503, str(exc))
 
-
-# --------------------------------------------------------------------------- #
-# /v1/chat/completions  –  OpenAI-compatible chat endpoint
-# --------------------------------------------------------------------------- #
 
 @app.post("/v1/chat/completions")
-@workflow(name="chat_completions")
 async def chat_completions(request: ChatCompletionRequest, raw_request: Request):
+    """Thin router — delegates to the @workflow helpers that own the span."""
     model = request.model or DEFAULT_MODEL
-    start = time.time()
-    _semconv_attrs = {
-        "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "ollama",
-        "gen_ai.request.model": model,
-        "gen_ai.response.model": model,
-        "server.address": _OLLAMA_HOST,
-        "server.port": _OLLAMA_PORT,
+    messages_raw = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+
+    m.request_count.add(1, {"model": model, "stream": str(request.stream)})
+    m.active_requests.add(1, {"model": model})
+
+    extra_ctx = {
+        "auth_header": raw_request.headers.get("authorization", ""),
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "max_tokens": request.max_tokens,
     }
-    logger.info(
-        "Chat completion request",
-        extra={"model": model, "stream": request.stream, "message_count": len(request.messages)},
-    )
-    llm_request_counter.add(1, {"model": model, "stream": str(request.stream)})
-    llm_active_requests.add(1, {"model": model})
-    llm_request_message_count.record(len(request.messages), _semconv_attrs)
-
-    # --- OTel GenAI semantic convention attributes --------------------------
-    span = trace.get_current_span()
-    messages_raw = [{"role": m.role, "content": m.content} for m in request.messages]
-    # Classify request type and rename span
-    request_type = _classify_request(messages_raw)
-    span.update_name(f"{request_type}")
-    span.set_attribute("llm.request.purpose", request_type)
-
-    # Conversation fingerprint — correlates chat + title + tag traces from the
-    # same user turn by hashing the user messages (shared across all requests).
-    user_msgs = [m["content"] for m in messages_raw if m["role"] == "user"]
-    # Title/tag requests embed the chat history, so extract the first user msg
-    if request_type != "user_chat" and user_msgs:
-        # The history is embedded in the system/user prompt; hash first 200 chars
-        fingerprint_input = user_msgs[0][:200]
-    else:
-        fingerprint_input = "|".join(user_msgs)
-    conversation_fingerprint = hashlib.sha256(fingerprint_input.encode()).hexdigest()[:12]
-    span.set_attribute("conversation.fingerprint", conversation_fingerprint)
-
-    # Authorization header forwarding for user identification
-    auth_header = raw_request.headers.get("authorization", "")
-    if auth_header:
-        span.set_attribute("enduser.id", hashlib.sha256(auth_header.encode()).hexdigest()[:8])
-    # Required
-    span.set_attribute("gen_ai.operation.name", "chat")
-    span.set_attribute("gen_ai.system", "ollama")
-    span.set_attribute("gen_ai.provider.name", "ollama")
-    span.set_attribute("gen_ai.request.model", model)
-    # Recommended
-    span.set_attribute("gen_ai.request.stream", request.stream or False)
-    span.set_attribute("gen_ai.output.type", "text")
-    span.set_attribute("server.address", _OLLAMA_HOST)
-    span.set_attribute("server.port", _OLLAMA_PORT)
-    if request.temperature is not None:
-        span.set_attribute("gen_ai.request.temperature", request.temperature)
-    if request.top_p is not None:
-        span.set_attribute("gen_ai.request.top_p", request.top_p)
-    if request.max_tokens is not None:
-        span.set_attribute("gen_ai.request.max_tokens", request.max_tokens)
-    # Opt-in: prompt / input messages
-    span.set_attribute("gen_ai.prompt", json.dumps(messages_raw))
-    span.set_attribute("gen_ai.input.messages", _format_input_messages(messages_raw))
-    # Indexed prompt attributes (OpenLLMetry format — Dynatrace native mapping)
-    for i, m in enumerate(messages_raw):
-        span.set_attribute(f"gen_ai.prompt.{i}.role", m["role"])
-        span.set_attribute(f"gen_ai.prompt.{i}.content", m["content"])
-    # LLM attributes
-    span.set_attribute("llm.request_type", "chat")
-    span.set_attribute("llm.is_streaming", request.stream or False)
 
     ollama_payload: dict = {
         "model": model,
-        "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+        "messages": messages_raw,
         "stream": request.stream,
         "options": {},
     }
-
     if request.temperature is not None:
         ollama_payload["options"]["temperature"] = request.temperature
     if request.top_p is not None:
@@ -380,111 +269,51 @@ async def chat_completions(request: ChatCompletionRequest, raw_request: Request)
 
     if request.stream:
         return StreamingResponse(
-            _stream_ollama(ollama_payload, model, request_type),
+            _stream_ollama(ollama_payload, model, messages_raw, extra_ctx),
             media_type="text/event-stream",
         )
-
-    result = await _non_stream_ollama(ollama_payload, model, request_type)
-    duration = time.time() - start
-    usage = result.get("usage", {})
-    prompt_toks = usage.get("prompt_tokens", 0)
-    completion_toks = usage.get("completion_tokens", 0)
-
-    # --- OTel GenAI semconv metrics -----------------------------------------
-    genai_client_operation_duration.record(duration, _semconv_attrs)
-    genai_client_token_usage.record(
-        prompt_toks,
-        {**_semconv_attrs, "gen_ai.token.type": "input"},
-    )
-    genai_client_token_usage.record(
-        completion_toks,
-        {**_semconv_attrs, "gen_ai.token.type": "output"},
-    )
-    # Token throughput
-    if duration > 0 and completion_toks > 0:
-        llm_token_throughput.record(completion_toks / duration, _semconv_attrs)
-    # Active requests
-    llm_active_requests.add(-1, {"model": model})
-
-    # --- OTel GenAI response attributes -------------------------------------
-    response_content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-    finish_reasons = [c.get("finish_reason") for c in result.get("choices", [])]
-    span.set_attribute("gen_ai.response.id", result.get("id", ""))
-    span.set_attribute("gen_ai.response.model", model)
-    span.set_attribute("gen_ai.response.finish_reasons", json.dumps(finish_reasons))
-    span.set_attribute("gen_ai.completion", response_content)
-    span.set_attribute("gen_ai.output.messages", _format_output_messages(response_content, finish_reasons[0] if finish_reasons else "stop"))
-    # Indexed completion attributes (OpenLLMetry format — Dynatrace native mapping)
-    for i, choice in enumerate(result.get("choices", [])):
-        span.set_attribute(f"gen_ai.completion.{i}.finish_reason", choice.get("finish_reason", "stop"))
-        span.set_attribute(f"gen_ai.completion.{i}.content", choice.get("message", {}).get("content", ""))
-    span.set_attribute("gen_ai.usage.input_tokens", prompt_toks)
-    span.set_attribute("gen_ai.usage.output_tokens", completion_toks)
-    span.set_attribute("gen_ai.usage.prompt_tokens", prompt_toks)
-    span.set_attribute("gen_ai.usage.completion_tokens", completion_toks)
-    span.set_attribute("gen_ai.usage.total_tokens", usage.get("total_tokens", 0))
-    logger.info(
-        "Chat completion finished",
-        extra={
-            "model": model,
-            "duration_s": round(duration, 3),
-            "prompt_tokens": prompt_toks,
-            "completion_tokens": completion_toks,
-            "total_tokens": usage.get("total_tokens", 0),
-        },
-    )
-    return result
+    return await _non_stream_ollama(ollama_payload, model, messages_raw, extra_ctx)
 
 
 # --------------------------------------------------------------------------- #
-# Internal helpers
+# gen_ai.chat span — streaming
 # --------------------------------------------------------------------------- #
 
-@workflow(name="stream_ollama")
-async def _stream_ollama(payload: dict, model: str, request_type: str = "user_chat"):
-    """Translate Ollama NDJSON stream → OpenAI SSE stream."""
-    logger.info("Starting streaming response", extra={"model": model, "request_type": request_type})
+@workflow(name="gen_ai.chat")
+async def _stream_ollama(payload: dict, model: str,
+                         messages: list[dict], extra_ctx: dict):
     stream_start = time.time()
     first_token_time: float | None = None
-    _semconv_attrs = {
-        "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "ollama",
-        "gen_ai.request.model": model,
-        "gen_ai.response.model": model,
-        "server.address": _OLLAMA_HOST,
-        "server.port": _OLLAMA_PORT,
-    }
+    request_type = _classify_request(messages)
+    attrs = _semconv_attrs(model)
     span = trace.get_current_span()
-    span.update_name(f"{request_type} stream")
-    span.set_attribute("llm.request.purpose", request_type)
-    span.set_attribute("gen_ai.operation.name", "chat")
-    span.set_attribute("gen_ai.system", "ollama")
-    span.set_attribute("gen_ai.provider.name", "ollama")
-    span.set_attribute("gen_ai.request.model", model)
-    span.set_attribute("gen_ai.output.type", "text")
-    span.set_attribute("server.address", _OLLAMA_HOST)
-    span.set_attribute("server.port", _OLLAMA_PORT)
-    # LLM + indexed prompt attributes (OpenLLMetry format — Dynatrace native mapping)
-    span.set_attribute("llm.request_type", "chat")
-    span.set_attribute("llm.is_streaming", True)
-    for i, m in enumerate(payload.get("messages", [])):
-        span.set_attribute(f"gen_ai.prompt.{i}.role", m["role"])
-        span.set_attribute(f"gen_ai.prompt.{i}.content", m["content"])
+
+    # --- Set all input attributes + span event ---
+    _set_genai_span(span, model, request_type, True, messages, extra_ctx)
+    m.message_count.record(len(messages), attrs)
+
+    logger.info("Streaming start", extra={"model": model, "request_type": request_type})
+
     full_response_parts: list[str] = []
     chunk_count = 0
+
     async with httpx.AsyncClient(timeout=300.0) as client:
+        # --- http.client.request child span to Ollama ---
         with _tracer.start_as_current_span(
-            "POST", kind=trace.SpanKind.CLIENT,
+            f"POST {_OLLAMA_HOST}:{_OLLAMA_PORT}/api/chat",
+            kind=trace.SpanKind.CLIENT,
             attributes={
                 "http.request.method": "POST",
                 "url.full": f"{OLLAMA_BASE_URL}/api/chat",
                 "server.address": _OLLAMA_HOST,
                 "server.port": _OLLAMA_PORT,
             },
-        ):
+        ) as http_span:
             async with client.stream(
                 "POST", f"{OLLAMA_BASE_URL}/api/chat", json=payload
             ) as response:
+                http_span.set_attribute("http.response.status_code", response.status_code)
+
                 async for line in response.aiter_lines():
                     if not line:
                         continue
@@ -506,158 +335,120 @@ async def _stream_ollama(payload: dict, model: str, request_type: str = "user_ch
                         "object": "chat.completion.chunk",
                         "created": int(time.time()),
                         "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": content} if content else {},
-                                "finish_reason": "stop" if done else None,
-                            }
-                        ],
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": content} if content else {},
+                            "finish_reason": "stop" if done else None,
+                        }],
                     }
                     yield f"data: {json.dumps(openai_chunk)}\n\n"
 
                     if done:
-                        stream_duration = time.time() - stream_start
+                        duration = time.time() - stream_start
                         prompt_toks = chunk.get("prompt_eval_count", 0)
                         completion_toks = chunk.get("eval_count", 0)
-                        full_text = "".join(full_response_parts)
+                        full_response = "".join(full_response_parts)
 
-                        # Span attributes
-                        span.set_attribute("gen_ai.response.finish_reasons", json.dumps(["stop"]))
-                        span.set_attribute("gen_ai.completion", full_text)
-                        span.set_attribute("gen_ai.output.messages", _format_output_messages(full_text))
-                        # Indexed completion attributes (Dynatrace native mapping)
-                        span.set_attribute("gen_ai.completion.0.content", full_text)
-                        span.set_attribute("gen_ai.completion.0.finish_reason", "stop")
-                        span.set_attribute("gen_ai.usage.input_tokens", prompt_toks)
-                        span.set_attribute("gen_ai.usage.output_tokens", completion_toks)
-                        span.set_attribute("gen_ai.usage.prompt_tokens", prompt_toks)
-                        span.set_attribute("gen_ai.usage.completion_tokens", completion_toks)
-                        span.set_attribute("gen_ai.usage.total_tokens", prompt_toks + completion_toks)
+                        # --- Response attributes + span event ---
+                        _set_genai_response(span, full_response, model,
+                                            prompt_toks, completion_toks)
 
-                        # GenAI semconv metrics
-                        genai_client_operation_duration.record(stream_duration, _semconv_attrs)
-                        genai_client_token_usage.record(
-                            prompt_toks, {**_semconv_attrs, "gen_ai.token.type": "input"})
-                        genai_client_token_usage.record(
-                            completion_toks, {**_semconv_attrs, "gen_ai.token.type": "output"})
+                        # TTFT / TPOT
+                        ttft = (first_token_time - stream_start) if first_token_time else None
+                        tpot = None
+                        if first_token_time and completion_toks > 1:
+                            tpot = (time.time() - first_token_time) / (completion_toks - 1)
 
-                        # Time-to-first-token
-                        if first_token_time is not None:
-                            ttft = first_token_time - stream_start
-                            genai_server_ttft.record(ttft, _semconv_attrs)
+                        _record_metrics(attrs, model, duration, prompt_toks,
+                                        completion_toks, ttft, tpot)
+                        m.stream_chunks.add(chunk_count, {"model": model})
 
-                        # Time-per-output-token (after first token)
-                        if first_token_time is not None and completion_toks > 1:
-                            decode_time = time.time() - first_token_time
-                            tpot = decode_time / (completion_toks - 1)
-                            genai_server_tpot.record(tpot, _semconv_attrs)
-
-                        # Operational metrics
-                        llm_stream_chunks.add(chunk_count, {"model": model})
-                        if stream_duration > 0 and completion_toks > 0:
-                            llm_token_throughput.record(
-                                completion_toks / stream_duration, _semconv_attrs)
-                        llm_active_requests.add(-1, {"model": model})
+                        logger.info("Stream done", extra={
+                            "model": model, "duration_s": round(duration, 3),
+                            "prompt_tokens": prompt_toks,
+                            "completion_tokens": completion_toks,
+                        })
 
                         yield "data: [DONE]\n\n"
                         break
 
 
-@workflow(name="non_stream_ollama")
-async def _non_stream_ollama(payload: dict, model: str, request_type: str = "user_chat") -> dict:
-    """Call Ollama without streaming and return an OpenAI-compatible response."""
+# --------------------------------------------------------------------------- #
+# gen_ai.chat span — non-streaming
+# --------------------------------------------------------------------------- #
+
+@workflow(name="gen_ai.chat")
+async def _non_stream_ollama(payload: dict, model: str,
+                             messages: list[dict], extra_ctx: dict) -> dict:
     ollama_start = time.time()
-    _ns_attrs = {
-        "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "ollama",
-        "gen_ai.request.model": model,
-        "gen_ai.response.model": model,
-        "server.address": _OLLAMA_HOST,
-        "server.port": _OLLAMA_PORT,
-    }
+    request_type = _classify_request(messages)
+    attrs = _semconv_attrs(model)
     span = trace.get_current_span()
-    span.update_name(f"{request_type} non-stream")
-    span.set_attribute("llm.request.purpose", request_type)
-    span.set_attribute("gen_ai.operation.name", "chat")
-    span.set_attribute("gen_ai.system", "ollama")
-    span.set_attribute("gen_ai.provider.name", "ollama")
-    span.set_attribute("gen_ai.request.model", model)
-    span.set_attribute("server.address", _OLLAMA_HOST)
-    span.set_attribute("server.port", _OLLAMA_PORT)
-    # LLM + indexed prompt attributes (OpenLLMetry format — Dynatrace native mapping)
-    span.set_attribute("llm.request_type", "chat")
-    span.set_attribute("llm.is_streaming", False)
-    for i, m in enumerate(payload.get("messages", [])):
-        span.set_attribute(f"gen_ai.prompt.{i}.role", m["role"])
-        span.set_attribute(f"gen_ai.prompt.{i}.content", m["content"])
+
+    # --- Set all input attributes + span event ---
+    _set_genai_span(span, model, request_type, False, messages, extra_ctx)
+    m.message_count.record(len(messages), attrs)
+
+    # --- http.client.request child span to Ollama ---
     async with httpx.AsyncClient(timeout=300.0) as client:
         try:
             with _tracer.start_as_current_span(
-                "POST", kind=trace.SpanKind.CLIENT,
+                f"POST {_OLLAMA_HOST}:{_OLLAMA_PORT}/api/chat",
+                kind=trace.SpanKind.CLIENT,
                 attributes={
                     "http.request.method": "POST",
                     "url.full": f"{OLLAMA_BASE_URL}/api/chat",
                     "server.address": _OLLAMA_HOST,
                     "server.port": _OLLAMA_PORT,
                 },
-            ):
+            ) as http_span:
                 response = await client.post(
                     f"{OLLAMA_BASE_URL}/api/chat", json=payload
                 )
                 response.raise_for_status()
+                http_span.set_attribute("http.response.status_code", response.status_code)
         except httpx.ConnectError:
             logger.error("Cannot reach Ollama at %s", OLLAMA_BASE_URL)
             span.set_attribute("error.type", "ConnectError")
-            llm_error_counter.add(1, {**_ns_attrs, "error.type": "ConnectError"})
-            llm_active_requests.add(-1, {"model": model})
-            raise HTTPException(
-                status_code=503,
-                detail="Cannot reach Ollama. Make sure it is running on the host.",
-            )
+            m.error_count.add(1, {**attrs, "error.type": "ConnectError"})
+            m.active_requests.add(-1, {"model": model})
+            raise HTTPException(503, "Cannot reach Ollama.")
 
     data = response.json()
     content = data.get("message", {}).get("content", "")
     prompt_tokens = data.get("prompt_eval_count", 0)
     completion_tokens = data.get("eval_count", 0)
+    resp_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
-    # Ollama timing data (nanoseconds) for TTFT / TPOT
+    # --- Response attributes + span event ---
+    _set_genai_response(span, content, model, prompt_tokens, completion_tokens,
+                        resp_id=resp_id)
+
+    # TTFT / TPOT from Ollama timing (nanoseconds)
     prompt_eval_duration = data.get("prompt_eval_duration", 0)
     eval_duration = data.get("eval_duration", 0)
-
-    if prompt_eval_duration > 0:
-        genai_server_ttft.record(prompt_eval_duration / 1e9, _ns_attrs)
+    ttft = (prompt_eval_duration / 1e9) if prompt_eval_duration > 0 else None
+    tpot = None
     if eval_duration > 0 and completion_tokens > 1:
-        genai_server_tpot.record(
-            (eval_duration / 1e9) / (completion_tokens - 1), _ns_attrs)
+        tpot = (eval_duration / 1e9) / (completion_tokens - 1)
 
-    ollama_duration = time.time() - ollama_start
-    if ollama_duration > 0 and completion_tokens > 0:
-        llm_token_throughput.record(completion_tokens / ollama_duration, _ns_attrs)
+    duration = time.time() - ollama_start
+    _record_metrics(attrs, model, duration, prompt_tokens, completion_tokens, ttft, tpot)
 
-    # Response attributes on the non_stream_ollama span
-    span.set_attribute("gen_ai.response.model", model)
-    span.set_attribute("gen_ai.completion", content)
-    span.set_attribute("gen_ai.output.messages", _format_output_messages(content))
-    span.set_attribute("gen_ai.response.finish_reasons", json.dumps(["stop"]))
-    span.set_attribute("gen_ai.usage.input_tokens", prompt_tokens)
-    span.set_attribute("gen_ai.usage.output_tokens", completion_tokens)
-    # Indexed completion attributes (Dynatrace native mapping)
-    span.set_attribute("gen_ai.completion.0.content", content)
-    span.set_attribute("gen_ai.completion.0.finish_reason", "stop")
+    logger.info("Chat done", extra={"model": model, "duration_s": round(duration, 3),
+                                     "prompt_tokens": prompt_tokens,
+                                     "completion_tokens": completion_tokens})
 
     return {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "id": resp_id,
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }
-        ],
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
         "usage": {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,

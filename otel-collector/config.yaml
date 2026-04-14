@@ -1,0 +1,29 @@
+# OTel Collector — gRPC→HTTP protocol bridge for Dynatrace
+# Receives gRPC from Open WebUI, exports OTLP/HTTP to Dynatrace.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Dynatrace requires DELTA temporality for monotonic sums and histograms.
+  # Open WebUI's SDK emits CUMULATIVE — this processor converts on the fly.
+  cumulativetodelta:
+
+exporters:
+  otlp_http:
+    endpoint: ${env:DT_OTLP_ENDPOINT}
+    headers:
+      Authorization: "Api-Token ${env:DT_OTLP_TOKEN}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp_http]
+    metrics:
+      receivers: [otlp]
+      processors: [cumulativetodelta]
+      exporters: [otlp_http]
