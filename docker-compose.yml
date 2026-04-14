@@ -4,9 +4,7 @@ services:
   # FastAPI backend — OpenAI-compatible proxy in front of host Ollama
   # -----------------------------------------------------------------------
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    build: ./backend
     container_name: llm-backend
     ports:
       - "8000:8000"

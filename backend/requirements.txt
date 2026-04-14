@@ -5,4 +5,4 @@ pydantic==2.9.2
 traceloop-sdk>=0.59.0
 opentelemetry-exporter-otlp-proto-http>=1.25.0
 opentelemetry-sdk>=1.25.0
-llm-otel-kit @ file:///app/llm-otel-kit
+llm-otel-kit>=0.1.0
